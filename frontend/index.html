@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDF 预览与编辑 Demo</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; margin: 24px; }
+      #app { display: grid; gap: 12px; max-width: 960px; }
+      .row { display: flex; gap: 8px; align-items: center; }
+      input { padding: 6px 8px; width: 200px; }
+      button { padding: 6px 12px; }
+      canvas { border: 1px solid #ddd; max-width: 100%; }
+      a { color: #0b73ff; text-decoration: none; }
+    </style>
+    <!-- Vue 3 全局构建 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <!-- PDF.js（2.x 兼容 UMD）-->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script>
+      // 配置 worker
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+    </script>
+    
+  </head>
+  <body>
+    <div id="app">
+      <h2>PDF 预览与原生文字编辑（PDFBox）</h2>
+      <div class="row">
+        <button @click="renderPDF()">预览示例 PDF</button>
+        <button @click="downloadSample()">直接下载示例 PDF</button>
+      </div>
+      <canvas id="pdfCanvas"></canvas>
+      <div class="row">
+        <input v-model="textToReplace" placeholder="原文字" />
+        <input v-model="newText" placeholder="新文字" />
+        <button @click="applyEdit">应用修改</button>
+      </div>
+      <div class="row" v-if="downloadUrl">
+        <a :href="downloadUrl" download="modified.pdf">下载修改后 PDF</a>
+      </div>
+    </div>
+
+    <script>
+      const { createApp, ref } = Vue;
+
+      createApp({
+        setup() {
+          const textToReplace = ref('world');
+          const newText = ref('PDFBox');
+          const downloadUrl = ref('');
+
+          async function renderPDF(srcUrl = 'http://localhost:8080/api/pdf/sample') {
+            const loadingTask = pdfjsLib.getDocument(srcUrl);
+            const pdf = await loadingTask.promise;
+            const page = await pdf.getPage(1);
+            const viewport = page.getViewport({ scale: 1.5 });
+            const canvas = document.getElementById('pdfCanvas');
+            const context = canvas.getContext('2d');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            await page.render({ canvasContext: context, viewport }).promise;
+          }
+
+          async function downloadSample() {
+            try {
+              const res = await fetch('http://localhost:8080/api/pdf/sample');
+              if (!res.ok) throw new Error('HTTP ' + res.status);
+              const blob = await res.blob();
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = 'example.pdf';
+              a.click();
+              URL.revokeObjectURL(url);
+            } catch (e) {
+              console.error('downloadSample failed:', e);
+              alert('下载失败：' + e);
+            }
+          }
+
+          async function applyEdit() {
+            try {
+              const res = await fetch('http://localhost:8080/api/pdf/edit-line', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  oldText: textToReplace.value,
+                  newText: newText.value,
+                  ignoreCase: true
+                })
+              });
+              if (!res.ok) throw new Error('HTTP ' + res.status);
+              const blob = await res.blob();
+              const objUrl = URL.createObjectURL(blob);
+              downloadUrl.value = objUrl;
+              // 用返回的修改后 PDF 进行预览渲染
+              await renderPDF(objUrl);
+            } catch (e) {
+              console.error('applyEdit failed:', e);
+              alert('应用修改失败：' + e);
+            }
+          }
+
+          // 首次渲染
+          renderPDF();
+
+          return { textToReplace, newText, downloadUrl, renderPDF, applyEdit, downloadSample };
+        }
+      }).mount('#app');
+    </script>
+  </body>
+  </html>
+
+
