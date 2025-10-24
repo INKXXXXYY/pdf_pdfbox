@@ -29,8 +29,9 @@ project-root/
 │  │  ├─ config/CorsConfig.java  # 全局 CORS 放开
 │  │  ├─ controller/PdfController.java  # REST 接口：/sample、/edit、/edit-inplace、/edit-line
 │  │  └─ service/
-│  │     ├─ PdfService.java      # PDF 读写、重排、原位替换、整行替换核心逻辑
-│  │     └─ TextSearcher.java    # 文本定位：字符匹配、行信息采集
+│  │     ├─ PdfService.java       # PDF 读写、重排、原位替换、整行替换核心逻辑
+│  │     ├─ TextSearcher.java     # 文本定位：字符匹配、行信息采集
+│  │     └─ TextBoxCollector.java # 行/词包围框收集（坐标与文本）
 │  └─ src/main/resources/application.yml # 端口等配置（默认 8080）
 └─ README.md
 ```
@@ -58,6 +59,25 @@ project-root/
   - 原位替换（尽量保留版式）：定位旧词坐标，白底遮盖，再用原字体/字号在同一基线写入新词
 - POST `/api/pdf/edit-line`：Body: `{ oldText, newText, ignoreCase }`
   - 整行替换：找到包含旧词的“行”，整行覆盖后按字符串替换后的内容重新绘制，避免长词遮挡后续文字
+- GET `/api/pdf/annotated?mode=line|word`：返回带红框标注的 PDF（`mode` 控制行/词级）
+- GET `/api/pdf/text-boxes?mode=line|word`：返回 JSON 文本框数组（坐标单位为 PDF 用户空间点，原点左下）
+
+返回的 Box 结构示例（行/词通用）：
+
+```
+[
+  {
+    "pageIndex": 0,
+    "x": 72.0,
+    "yTop": 700.5,
+    "width": 320.0,
+    "height": 16.4,
+    "text": "This is a line text",
+    "pageWidth": 595.0,
+    "pageHeight": 842.0
+  }
+]
+```
 
 ### 说明与限制
 - 全文重排（/edit）用于“流程演示”，不保留原始版式/分页/字体嵌入。
@@ -88,6 +108,37 @@ project-root/
   - 行框：`x = min(XDirAdj)`，`width = max(XDirAdj+WidthDirAdj) - x`，`yTop = baselineY + max(ascent)`，`height = (ascent + descent)`；
   - 前端加载 `/annotated?mode=line` 作为底图，同时拉取 `/text-boxes?mode=line` 叠加透明 span；
   - 双击 span → 输入框预填充 `data-line-text` → 调用 `/edit-line` → 用返回 PDF 重新渲染。
+
+### 实现步骤（后端识别 + 前端双击编辑）
+
+1) 后端识别与标注
+- 使用 `TextBoxCollector`（行级：`Mode.LINE`；词级：`Mode.WORD`）遍历每页 `writeString` 的 `TextPosition`，计算：
+  - 行：按同页且基线 `baselineY` 差值 ≤ 1pt 聚合，取最小左 x、最大右 x、最大上升距 ascent、最大下降距 descent，得到包围框：
+    - `x = minX`
+    - `yTop = baselineY + maxAscent`
+    - `width = maxX - minX`
+    - `height = maxAscent + maxDescent`
+  - 词：按相邻字符间距阈值与空白切分，逐词输出包围框与 `text`。
+- 暴露接口：
+  - `GET /api/pdf/text-boxes?mode=line|word` → 返回 Box 数组供前端交互层使用。
+  - `GET /api/pdf/annotated?mode=line|word` → 在原 PDF 上追加红色虚线框并返回，用作预览底图。
+
+2) 前端覆盖层与双击编辑
+- 用 PDF.js 渲染底图（可直接使用 `/annotated` 的流）。
+- 请求 `/text-boxes`（默认行级），仅取当前页的 Box，按同一缩放比 `scale` 将坐标映射为像素：
+  - `leftPx = x * scale`
+  - `topPx = (pageHeight - yTop) * scale`（PDF 原点左下，CSS 原点左上，需翻转 y）
+  - `widthPx = width * scale`，`heightPx = height * scale`
+- 在画布上方放置绝对定位的 `span.textItem`，保存属性：`data-line-text`、`data-page-index`。
+- 绑定 `ondblclick`：在目标 `span` 上方显示输入框，预填充整行文本；回车或失焦提交：
+  - POST `/api/pdf/edit-line`，Body：`{ oldText: lineText, newText, pageIndex, ignoreCase }`
+  - 成功后以返回的 PDF Blob 作为新的渲染源，重新调用渲染函数。
+
+3) 重要约定与对齐
+- 前后端必须使用一致的缩放比计算覆盖层像素位置；前端应保存 `pageWidth/pageHeight` 以便坐标换算。
+- 当前示例仅渲染第 1 页并过滤 `pageIndex === 0`；多页时需：
+  - 循环 `pdf.getPage(n)` 渲染多个 `canvas`；
+  - 为每页创建独立的 `textLayer` 容器并按对应 `pageIndex` 叠加 Box。
 
 ### 已知坑与规避建议
 - 字体与字形
