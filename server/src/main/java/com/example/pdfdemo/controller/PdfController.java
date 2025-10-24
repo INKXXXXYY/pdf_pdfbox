@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -56,10 +57,30 @@ public class PdfController {
         String oldText = body.getOrDefault("oldText", "");
         String newText = body.getOrDefault("newText", "");
         boolean ignoreCase = Boolean.parseBoolean(body.getOrDefault("ignoreCase", "false"));
-        byte[] data = pdfService.editWholeLine(oldText, newText, ignoreCase);
+        Integer pageIndex = null;
+        if (body.containsKey("pageIndex")) {
+            try { pageIndex = Integer.parseInt(body.get("pageIndex")); } catch (Exception ignored) {}
+        }
+        String lineText = body.getOrDefault("lineText", null);
+
+        byte[] data = pdfService.editWholeLine(oldText, newText, ignoreCase, pageIndex, lineText);
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_PDF)
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=modified_line.pdf")
+                .body(data);
+    }
+
+    @GetMapping(value = "/text-boxes", produces = MediaType.APPLICATION_JSON_VALUE)
+    public List<com.example.pdfdemo.service.TextBoxCollector.Box> getTextBoxes(@RequestParam(value = "mode", required = false) String mode) throws IOException {
+        return pdfService.collectTextBoxes(mode);
+    }
+
+    @GetMapping(value = "/annotated")
+    public ResponseEntity<byte[]> getAnnotated(@RequestParam(value = "mode", required = false) String mode) throws IOException {
+        byte[] data = pdfService.renderAnnotatedTextBoxes(mode);
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=annotated.pdf")
                 .body(data);
     }
 }

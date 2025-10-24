@@ -12,6 +12,12 @@
       button { padding: 6px 12px; }
       canvas { border: 1px solid #ddd; max-width: 100%; }
       a { color: #0b73ff; text-decoration: none; }
+      .viewer { position: relative; width: fit-content; }
+      .textLayer { position: absolute; left: 0; top: 0; pointer-events: auto; }
+      .textLayer span { position: absolute; white-space: pre; transform-origin: 0% 0%; color: transparent; user-select: none; cursor: text; box-sizing: border-box; }
+      /* 调试可视化：显示所有文本的包围框 */
+      .textLayer.debug span { outline: 1px dashed rgba(255,0,0,0.9); }
+      .inline-editor { position: absolute; z-index: 10; font-size: 14px; padding: 2px 4px; border: 1px solid #409eff; outline: none; background: #fff; box-sizing: border-box; }
     </style>
     <!-- Vue 3 全局构建 -->
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
@@ -29,8 +35,16 @@
       <div class="row">
         <button @click="renderPDF()">预览示例 PDF</button>
         <button @click="downloadSample()">直接下载示例 PDF</button>
+        <label style="margin-left:12px; user-select:none;">
+          <input type="checkbox" v-model="showBoxes" /> 显示文本框
+        </label>
+        
       </div>
-      <canvas id="pdfCanvas"></canvas>
+      <div class="viewer">
+        <canvas id="pdfCanvas"></canvas>
+        <div id="textLayer" class="textLayer"></div>
+        <input id="inlineEditor" class="inline-editor" style="display:none" />
+      </div>
       <div class="row">
         <input v-model="textToReplace" placeholder="原文字" />
         <input v-model="newText" placeholder="新文字" />
@@ -49,17 +63,87 @@
           const textToReplace = ref('world');
           const newText = ref('PDFBox');
           const downloadUrl = ref('');
+          const showBoxes = ref(true);
 
-          async function renderPDF(srcUrl = 'http://localhost:8080/api/pdf/sample') {
+          async function renderPDF(srcUrl = 'http://localhost:8080/api/pdf/annotated?mode=line') {
             const loadingTask = pdfjsLib.getDocument(srcUrl);
             const pdf = await loadingTask.promise;
             const page = await pdf.getPage(1);
-            const viewport = page.getViewport({ scale: 1.5 });
+            const scale = 1.5;
+            const viewport = page.getViewport({ scale });
             const canvas = document.getElementById('pdfCanvas');
             const context = canvas.getContext('2d');
             canvas.width = viewport.width;
             canvas.height = viewport.height;
             await page.render({ canvasContext: context, viewport }).promise;
+
+            // 仅显示后端识别到的文本框（第一页）
+            const textLayerEl = document.getElementById('textLayer');
+            textLayerEl.innerHTML = '';
+            textLayerEl.style.width = canvas.style.width || canvas.width + 'px';
+            textLayerEl.style.height = canvas.style.height || canvas.height + 'px';
+            // 从后端获取行级框用于交互（可选显示）
+            try {
+              const res = await fetch('http://localhost:8080/api/pdf/text-boxes?mode=line');
+              if (res.ok) {
+                const boxes = await res.json();
+                boxes.filter(b => b.pageIndex === 0).forEach(b => {
+                  const div = document.createElement('span');
+                  div.className = 'textItem';
+                  div.dataset.lineText = (b.text || '');
+                  if (typeof b.pageIndex === 'number') div.dataset.pageIndex = String(b.pageIndex);
+                  div.style.position = 'absolute';
+                  div.style.left = (b.x * scale) + 'px';
+                  const topFromTop = ((b.pageHeight - b.yTop) * scale);
+                  div.style.top = topFromTop + 'px';
+                  div.style.width = (b.width * scale) + 'px';
+                  div.style.height = (b.height * scale) + 'px';
+                  if (showBoxes.value) div.style.outline = '1px dashed rgba(255,0,0,0.9)';
+                  textLayerEl.appendChild(div);
+                });
+
+                // 为文本框绑定双击编辑（在元素创建之后绑定，避免空引用）
+                textLayerEl.ondblclick = async (e) => {
+                  const target = e.target.closest('span.textItem');
+                  if (!target) return;
+                  const rect = target.getBoundingClientRect();
+                  const container = document.querySelector('.viewer').getBoundingClientRect();
+                  const editor = document.getElementById('inlineEditor');
+                  editor.style.left = (rect.left - container.left) + 'px';
+                  editor.style.top = (rect.top - container.top) + 'px';
+                  editor.style.width = rect.width + 'px';
+                  editor.style.height = rect.height + 'px';
+                  editor.value = target.dataset.lineText || '';
+                  editor.style.display = 'block';
+                  editor.focus();
+
+                  const submit = async () => {
+                    const newVal = editor.value.trim();
+                    editor.style.display = 'none';
+                    if (!newVal) return;
+                    const lineText = target.dataset.lineText || '';
+                    const pageIndex = parseInt(target.dataset.pageIndex || '0', 10);
+                    const res2 = await fetch('http://localhost:8080/api/pdf/edit-line', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        oldText: lineText,
+                        newText: newVal,
+                        ignoreCase: false,
+                        pageIndex,
+                        lineText: lineText
+                      })
+                    });
+                    if (!res2.ok) { alert('编辑失败: HTTP ' + res2.status); return; }
+                    const blob = await res2.blob();
+                    const objUrl = URL.createObjectURL(blob);
+                    await renderPDF(objUrl);
+                  };
+                  editor.onkeydown = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); submit(); } if (ev.key === 'Escape') editor.style.display = 'none'; };
+                  editor.onblur = submit;
+                };
+              }
+            } catch {}
           }
 
           async function downloadSample() {
@@ -105,7 +189,7 @@
           // 首次渲染
           renderPDF();
 
-          return { textToReplace, newText, downloadUrl, renderPDF, applyEdit, downloadSample };
+          return { textToReplace, newText, downloadUrl, renderPDF, applyEdit, downloadSample, showBoxes };
         }
       }).mount('#app');
     </script>

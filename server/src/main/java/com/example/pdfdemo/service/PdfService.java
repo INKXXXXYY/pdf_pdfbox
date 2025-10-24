@@ -208,7 +208,8 @@ public class PdfService {
         }
     }
 
-    public byte[] editWholeLine(String oldText, String newText, boolean ignoreCase) throws IOException {
+    public byte[] editWholeLine(String oldText, String newText, boolean ignoreCase,
+                                Integer pageIndexOpt, String lineTextOpt) throws IOException {
         if (oldText == null || oldText.isEmpty()) {
             return getSamplePdf();
         }
@@ -229,6 +230,8 @@ public class PdfService {
                     }
                 }
                 if (line == null) continue;
+                if (pageIndexOpt != null && !pageIndexOpt.equals(line.pageIndex)) continue;
+                if (lineTextOpt != null && !line.text.contains(lineTextOpt)) continue;
 
                 var page = document.getPage(m.pageIndex);
                 try (PDPageContentStream cs = new PDPageContentStream(document, page,
@@ -279,6 +282,48 @@ public class PdfService {
                     cs.newLineAtOffset(line.xStart, line.yBaseline);
                     cs.showText(replaced);
                     cs.endText();
+                }
+            }
+
+            try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                document.save(baos);
+                return baos.toByteArray();
+            }
+        }
+    }
+
+    public List<TextBoxCollector.Box> collectTextBoxes(String mode) throws IOException {
+        try (PDDocument document = PDDocument.load(getExamplePdfPath().toFile())) {
+            TextBoxCollector.Mode m = "word".equalsIgnoreCase(mode) ? TextBoxCollector.Mode.WORD : TextBoxCollector.Mode.LINE;
+            TextBoxCollector collector = new TextBoxCollector(m);
+            return collector.collect(document);
+        }
+    }
+
+    public byte[] renderAnnotatedTextBoxes(String mode) throws IOException {
+        try (PDDocument document = PDDocument.load(getExamplePdfPath().toFile())) {
+            TextBoxCollector.Mode m = "word".equalsIgnoreCase(mode) ? TextBoxCollector.Mode.WORD : TextBoxCollector.Mode.LINE;
+            TextBoxCollector collector = new TextBoxCollector(m);
+            List<TextBoxCollector.Box> boxes = collector.collect(document);
+
+            for (int p = 0; p < document.getNumberOfPages(); p++) {
+                PDPage page = document.getPage(p);
+                try (PDPageContentStream cs = new PDPageContentStream(
+                        document,
+                        page,
+                        PDPageContentStream.AppendMode.APPEND,
+                        true,
+                        true)) {
+                    cs.setStrokingColor(java.awt.Color.RED);
+                    cs.setLineWidth(0.7f);
+                    cs.setLineDashPattern(new float[]{3f, 2f}, 0);
+                    for (TextBoxCollector.Box b : boxes) {
+                        if (b.pageIndex != p) continue;
+                        float y = b.yTop - b.height;
+                        cs.addRect(b.x, y, b.width, b.height);
+                    }
+                    cs.stroke();
+                    cs.setLineDashPattern(new float[]{}, 0);
                 }
             }
 

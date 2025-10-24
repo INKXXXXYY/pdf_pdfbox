@@ -1,9 +1,11 @@
-## PDF 预览与编辑 Demo（PDF.js + Spring Boot + PDFBox）
+## PDFBox 双击行级编辑 Demo（PDF.js + Spring Boot + PDFBox）
 
 ### 功能
 - 预览 PDF（PDF.js 渲染）
-- 编辑原生文字：
-  - 全文重排示例（/api/pdf/edit）
+- 后端绘制红框（行级），可对齐渲染结果
+- 双击行级红框就地编辑：预填充整行原文，回车替换后重新渲染
+- 编辑原生文字（三种策略，作对比）：
+  - 全文重排（/api/pdf/edit）
   - 原位替换保版式（/api/pdf/edit-inplace）
   - 整行替换（/api/pdf/edit-line）
 - 下载修改后的 PDF
@@ -78,8 +80,14 @@ project-root/
     - B：保持字号并右移同块后续文本（已实现简版，能处理在同一内容块内的中文/英文常见场景）
 
 - 整行替换（/edit-line）
-  - 先找到“包含命中词”的行（同页且基线接近），覆盖整行区域。
+  - 先找到“包含命中词”的行（同页且基线接近），覆盖整行区域；
   - 将行文本做字符串替换后按原字体/字号在原起点和基线重绘，避免长词导致遮挡。
+
+- 行级识别与交互（新增）
+  - `TextBoxCollector` 行聚合：同页且 `|baselineY差| ≤ 1pt`；
+  - 行框：`x = min(XDirAdj)`，`width = max(XDirAdj+WidthDirAdj) - x`，`yTop = baselineY + max(ascent)`，`height = (ascent + descent)`；
+  - 前端加载 `/annotated?mode=line` 作为底图，同时拉取 `/text-boxes?mode=line` 叠加透明 span；
+  - 双击 span → 输入框预填充 `data-line-text` → 调用 `/edit-line` → 用返回 PDF 重新渲染。
 
 ### 已知坑与规避建议
 - 字体与字形
@@ -110,6 +118,22 @@ project-root/
 - 前端只做渲染与发起编辑指令（JSON），不上传整文档（可扩展为上传文件接口）。
 
 ### 可能的扩展
+
+### 封版与发布
+
+- 当前封版：行级识别 + 后端红框绘制 + 双击行级编辑；
+- 建议打标签：`v1.0.0`；
+- 提交到 GitHub：
+```
+git init
+git add -A
+git commit -m "feat: 行级红框与双击编辑; docs: README"
+git branch -M main
+git remote add origin <YOUR_GITHUB_REPO_URL>
+git push -u origin main
+git tag -a v1.0.0 -m "v1.0.0 行级编辑"
+git push origin --tags
+```
 - 上传任意 PDF：新增上传接口，临时保存为会话文件并在编辑时指定目标文件。
 - 更强的“原位替换”：
   - 逐字重绘、按字间距/字距/旋转角度精确放置；
